@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  promptforge-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: promptforge-mcp
+    ports:
+      - "${MCP_SERVER_PORT:-9099}:9099"
+    environment:
+      # AI服务提供商API密钥
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      
+      # AI服务配置
+      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-anthropic}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      
+      # 数据库配置
+      - DATABASE_PATH=/data/promptforge.db
+      
+      # 服务配置
+      - MCP_SERVER_PORT=9099
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-50000}
+      - ANALYSIS_TIMEOUT=${ANALYSIS_TIMEOUT:-30}
+      - EXECUTION_TIMEOUT=${EXECUTION_TIMEOUT:-60}
+      
+      # AI模型配置
+      - DEFAULT_ANALYSIS_MODEL=${DEFAULT_ANALYSIS_MODEL:-claude-3-7-sonnet-20250219}
+      - DEFAULT_EXECUTION_MODEL=${DEFAULT_EXECUTION_MODEL:-claude-3-7-sonnet-20250219}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-nano}
+      
+      # 安全配置
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      
+      # Python环境配置
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    
+    volumes:
+      # 持久化数据库和数据
+      - promptforge_data:/data
+      # 可选：挂载配置文件
+      - ./.env:/app/.env:ro
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "promptforge_mcp.main"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # 资源限制 (可选)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.1'
+    
+    # 网络配置
+    networks:
+      - promptforge-network
+
+# 数据卷定义
+volumes:
+  promptforge_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data
+
+# 网络定义
+networks:
+  promptforge-network:
+    driver: bridge 

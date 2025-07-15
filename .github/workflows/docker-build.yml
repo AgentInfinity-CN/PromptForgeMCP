@@ -1,0 +1,194 @@
+name: 🐳 Build & Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: 🏗️ Build and Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 🔐 Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 🔧 Set lowercase image name
+      id: image-name
+      run: echo "value=$(echo ${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+    - name: 🏷️ Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.value }}
+        tags: |
+          type=ref,event=branch
+          type=sha,prefix=sha-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+        labels: |
+          org.opencontainers.image.title=PromptForge
+          org.opencontainers.image.description=AI prompt engineering workbench
+          org.opencontainers.image.vendor=PromptForge
+          org.opencontainers.image.licenses=GPL-3.0
+
+    - name: 🔨 Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          REVISION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
+
+    - name: 📝 Generate deployment manifest
+      run: |
+        mkdir -p deployment
+        cat > deployment/docker-compose.yml << EOF
+        version: '3.8'
+        services:
+          promptforge:
+            image: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+            ports:
+              - "8080:8080"
+            environment:
+              - PORT=8080
+              - DATABASE_PATH=/data/promptforge.db
+            volumes:
+              - promptforge_data:/data
+            restart: unless-stopped
+            healthcheck:
+              test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/health"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 40s
+
+        volumes:
+          promptforge_data:
+        EOF
+
+    - name: 📤 Upload deployment artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-manifests
+        path: deployment/
+        retention-days: 90
+
+  security-scan:
+    name: 🛡️ Security Scan
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🔧 Set lowercase image name for security scan
+      id: scan-image-name
+      run: echo "value=$(echo ${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+    - name: 🔍 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ steps.scan-image-name.outputs.value }}:latest
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        exit-code: '0'
+        ignore-unfixed: true
+
+    - name: 🔎 Check if SARIF file exists
+      run: |
+        if [ -f trivy-results.sarif ]; then
+          echo "✅ SARIF file generated successfully"
+          echo "File size: $(ls -lh trivy-results.sarif | awk '{print $5}')"
+          # Check if file has content
+          if [ -s trivy-results.sarif ]; then
+            echo "✅ SARIF file has content"
+          else
+            echo "⚠️ SARIF file is empty, creating minimal SARIF structure"
+            cat > trivy-results.sarif << 'EOF'
+        {
+          "version": "2.1.0",
+          "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+          "runs": []
+        }
+        EOF
+          fi
+        else
+          echo "❌ SARIF file not found"
+          ls -la
+          echo "Creating empty SARIF file"
+          cat > trivy-results.sarif << 'EOF'
+        {
+          "version": "2.1.0",
+          "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+          "runs": []
+        }
+        EOF
+        fi
+
+    - name: 📤 Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  notify:
+    name: 📢 Notify
+    runs-on: ubuntu-latest
+    needs: [build-and-push, security-scan]
+    if: always()
+
+    steps:
+    - name: 📨 Create deployment summary
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Build | ${{ needs.build-and-push.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Security Scan | ${{ needs.security-scan.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        LOWERCASE_IMAGE=$(echo ${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')
+        echo "### 📦 Published Images" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.REGISTRY }}/${LOWERCASE_IMAGE}:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.REGISTRY }}/${LOWERCASE_IMAGE}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔧 Quick Deploy" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "docker run -p 8080:8080 ${{ env.REGISTRY }}/${LOWERCASE_IMAGE}:latest" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY 

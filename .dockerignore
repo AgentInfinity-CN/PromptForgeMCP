@@ -1,0 +1,92 @@
+# Git相关
+.git
+.gitignore
+.github
+
+# Python相关
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.venv/
+venv/
+ENV/
+env/
+.env
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE相关
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 构建和分发
+build/
+dist/
+*.egg-info/
+.tox/
+
+# 文档
+docs/_build/
+*.md
+README.md
+PROMPTFORGE_MCP_README.md
+
+# 测试相关
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 数据和日志
+*.log
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+
+# 操作系统相关
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+
+# Docker相关
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 配置文件（生产环境中应通过环境变量或挂载提供）
+.env*
+# env.template 需要复制到镜像中作为模板
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# 大文件
+*.png
+*.jpg
+*.jpeg
+*.gif
+screenshot.png
+
+# Go项目遗留文件（如果还有的话）
+*.go
+go.mod
+go.sum
+.golangci.yml
+
+# 其他不需要的文件
+LICENSE
+# uv.lock 是依赖锁定文件，构建时需要 
